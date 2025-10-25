@@ -1,16 +1,19 @@
 package kvsrv
 
 import (
-	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
-	"6.5840/tester1"
-)
+	"fmt"
 
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
+	tester "6.5840/tester1"
+)
 
 type Clerk struct {
 	clnt   *tester.Clnt
 	server string
 }
+
+const MaxRetries = 10
 
 func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
 	ck := &Clerk{clnt: clnt, server: server}
@@ -30,6 +33,21 @@ func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
+	DPrintf("Clerk Get key = %s\n", key)
+	args := rpc.GetArgs{Key: key}
+	var reply rpc.GetReply
+	for idx := 0; idx < MaxRetries; idx++ {
+		ok := ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
+		if ok {
+			if reply.Err == rpc.OK {
+				return reply.Value, reply.Version, rpc.OK
+			} else if reply.Err == rpc.ErrNoKey {
+				return "", 0, rpc.ErrNoKey
+			}
+		} else {
+			fmt.Printf("Get: (%d) RPC error for key=%s\n", idx, key)
+		}
+	}
 	return "", 0, rpc.ErrNoKey
 }
 
@@ -52,5 +70,24 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
+	DPrintf("Clerk Put key = %s, value = %s, version = %d\n", key, value, version)
+	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	var reply rpc.PutReply
+	for idx := 0; idx < MaxRetries; idx++ {
+		ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
+		if ok {
+			if reply.Err == rpc.OK {
+				return rpc.OK
+			} else if reply.Err == rpc.ErrVersion {
+				if idx == 0 {
+					return rpc.ErrVersion
+				} else {
+					return rpc.ErrMaybe
+				}
+			}
+		} else {
+			fmt.Printf("Put: (%d) RPC error for key=%s, value=%s, version=%d\n", idx, key, value, version)
+		}
+	}
 	return rpc.ErrNoKey
 }

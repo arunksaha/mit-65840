@@ -6,7 +6,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 const Debug = false
@@ -18,16 +18,24 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+type KeyType string
+
+type ValueInfo struct {
+	Value   string
+	Version rpc.Tversion
+}
 
 type KVServer struct {
 	mu sync.Mutex
 
 	// Your definitions here.
+	kvmap map[KeyType]ValueInfo
 }
 
 func MakeKVServer() *KVServer {
 	kv := &KVServer{}
 	// Your code here.
+	kv.kvmap = make(map[KeyType]ValueInfo)
 	return kv
 }
 
@@ -35,6 +43,17 @@ func MakeKVServer() *KVServer {
 // exists. Otherwise, Get returns ErrNoKey.
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	// Your code here.
+	DPrintf("KVServer Get key = %s\n", args.Key)
+	key := KeyType(args.Key)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if val, ok := kv.kvmap[key]; ok {
+		reply.Value = val.Value
+		reply.Version = val.Version
+		reply.Err = rpc.OK
+	} else {
+		reply.Err = rpc.ErrNoKey
+	}
 }
 
 // Update the value for a key if args.Version matches the version of
@@ -43,12 +62,30 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 // args.Version is 0, and returns ErrNoKey otherwise.
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	// Your code here.
+	DPrintf("KVServer Put key = %s\n", args.Key)
+	key := KeyType(args.Key)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if val, ok := kv.kvmap[key]; ok {
+		if val.Version == args.Version {
+			kv.kvmap[key] = ValueInfo{Value: args.Value, Version: val.Version + 1}
+			reply.Err = rpc.OK
+		} else {
+			reply.Err = rpc.ErrVersion
+		}
+	} else {
+		if args.Version == 0 {
+			kv.kvmap[key] = ValueInfo{Value: args.Value, Version: 1}
+			reply.Err = rpc.OK
+		} else {
+			reply.Err = rpc.ErrNoKey
+		}
+	}
 }
 
 // You can ignore Kill() for this lab
 func (kv *KVServer) Kill() {
 }
-
 
 // You can ignore all arguments; they are for replicated KVservers
 func StartKVServer(ends []*labrpc.ClientEnd, gid tester.Tgid, srv int, persister *tester.Persister) []tester.IService {
