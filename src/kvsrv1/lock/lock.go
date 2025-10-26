@@ -2,7 +2,6 @@ package lock
 
 import (
 	"log"
-	"sync"
 	"time"
 
 	"6.5840/kvsrv1/rpc"
@@ -25,7 +24,6 @@ type Lock struct {
 	// MakeLock().
 	ck kvtest.IKVClerk
 	// You may add code here
-	mu    sync.Mutex
 	key   string
 	value string
 }
@@ -53,10 +51,8 @@ func (lk *Lock) Acquire() {
 	var version rpc.Tversion
 	var gresult, presult rpc.Err
 	for {
-		lk.mu.Lock()
 		presult = lk.ck.Put(lk.key, lk.value, 0)
 		if presult == rpc.OK {
-			lk.mu.Unlock()
 			break
 		}
 		_, version, gresult = lk.ck.Get(lk.key)
@@ -65,14 +61,12 @@ func (lk *Lock) Acquire() {
 				presult = lk.ck.Put(lk.key, lk.value, version)
 				done := presult == rpc.OK || presult == rpc.ErrMaybe || presult == rpc.ErrNoKey
 				if done {
-					lk.mu.Unlock()
 					break
 				}
 			} else {
-				DPrintf("Acquire version=%d unexpected, release first?\n", version)
+				log.Printf("Acquire version=%d unexpected, release first?\n", version)
 			}
 		}
-		lk.mu.Unlock()
 		BusyWait()
 	}
 }
@@ -85,19 +79,16 @@ func (lk *Lock) Release() {
 	var version rpc.Tversion
 	var gresult, presult rpc.Err
 	for {
-		lk.mu.Lock()
 		val, version, gresult = lk.ck.Get(lk.key)
 		if gresult == rpc.OK {
 			if !Even(uint64(version)) && (val == lk.value) {
 				presult = lk.ck.Put(lk.key, lk.value, version)
 				done := presult == rpc.OK || presult == rpc.ErrMaybe || presult == rpc.ErrNoKey
 				if done {
-					lk.mu.Unlock()
 					break
 				}
 			}
 		}
-		lk.mu.Unlock()
 		BusyWait()
 	}
 }
