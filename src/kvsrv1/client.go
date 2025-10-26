@@ -1,8 +1,6 @@
 package kvsrv
 
 import (
-	"fmt"
-
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 	tester "6.5840/tester1"
@@ -45,7 +43,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 				return "", 0, rpc.ErrNoKey
 			}
 		} else {
-			fmt.Printf("Get: (%d) RPC error for key=%s\n", idx, key)
+			DPrintf("Get: (%d) RPC error for key=%s\n", idx, key)
 		}
 	}
 	return "", 0, rpc.ErrNoKey
@@ -86,7 +84,7 @@ func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 				}
 			}
 		} else {
-			fmt.Printf("Put: (%d) RPC error for key=%s, value=%s, version=%d\n", idx, key, value, version)
+			DPrintf("Put: (%d) RPC error for key=%s, value=%s, version=%d\n", idx, key, value, version)
 		}
 	}
 	return rpc.ErrNoKey
