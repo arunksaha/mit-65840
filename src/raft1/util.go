@@ -10,3 +10,11 @@ func DPrintf(format string, a ...interface{}) {
 		log.Printf(format, a...)
 	}
 }
+
+const debugLogEnabled = false
+
+func DLog(format string, a ...interface{}) {
+	if debugLogEnabled {
+		log.Printf(format, a...)
+	}
+}
