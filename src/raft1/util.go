@@ -18,3 +18,11 @@ func DLog(format string, a ...interface{}) {
 		log.Printf(format, a...)
 	}
 }
+
+const traceEnabled = false
+
+func DTrace(format string, a ...interface{}) {
+	if traceEnabled {
+		log.Printf(format, a...)
+	}
+}

@@ -1,4 +1,18 @@
-# Lab 3A: Leader Election
+# Lab 3B: Log
+
+## Intro
+
+Please see README-3A.md for the design of Lab 3A.
+
+The goal of this lab (3B) is to implement log replication:
+  - Leaders accept new log entries through the method `Start()`.
+  - Leaders send them to followers via `AppendEntries()` RPC.
+  - Followers append them to their logs if consistent.
+  - Once a majority acknowledges, the entry is committed and applied.
+
+No persistence of snapshots yet, just in-memory logs and commit.
+
+## Overview
 
 Following is the essential data structures for each Raft instance:
   - currentTerm: the current term (set to 0 on initialization and kill)
@@ -11,9 +25,35 @@ Following is the essential data structures for each Raft instance:
     300ms and 500ms; the exact value is chosen at init and
     whenever the server goes to the Follower state.
 
+Following are added for 3B:
+
+  - `log []logEntry`: log entries; each entry contains command for state machine, and
+    when entry was received by leader. (first index is 1)
+
+  - `commitIndex int`: index of highest log entry known to be committed
+    (initialized to 0, increases monotonically)
+    It is the highest log index known to be committed in the Raft cluster.
+    A log entry is considered *committed* when:
+      - It is stored on a majority of servers (including the Leader), and
+      - It is in the Leader's current term (safety property)
+    Once an entry is committed, it is guaranteed to stay in the log of any future leader.
+
+  - `lastApplied int`: index of highest log entry applied to state machine
+    (initialized to 0, increases monotonically)
+
+Following state are maintained on leaders and reiniitalized after election:
+
+  - `nextIndex []int`: for each server, index of the next log entry to send to that server
+    (initialized to leader last log index + 1)
+
+  - `matchingIndex []int`: for each server, index of the highest log entry
+    known to be replicated on server
+    (initialized to 0, increases monotonically)
+    It is the highest log index a Follower has stored.
+
 Two RPCs are used:
    - RequestVote
-   - AppendEntries (used for heartbeat)
+   - AppendEntries
 
 ## General RPC rule
 
@@ -29,11 +69,13 @@ If a Follower hasn't received any heartbeat for electionTimeout,
 then it promotes itself to Candidate, increments its term and
 sends RequestVote to all other peers.
 
-The request has two parameters:
+The request has four parameters:
   - Term: Candidate's term
   - CandidateId: Candidate's server id
+  - LastLogIndex: index of of Candidate's last log entry
+  - LastLogTerm: term of Candidate's last log entry
 
-The reply has two parameters too:
+The reply has two parameters:
   - CurrentTerm: current term of responder
   - VoteGranted: boolean, true iff responder voted this candidate
 
@@ -55,8 +97,15 @@ The response processing logic consist of the following:
 
   - If the responder term is same as the candidate (possibly due to the above
     update), then vote is granted if:
-      - either this server has not voted,
-      - or, the server has voted this candidate
+      - vote is granted if the server has not yet voted in this term (votedFor == Null)
+         or has already voted for this candidate.
+      - candidate's log is at least as up-to-date as receiver's log
+  ```
+  lastLogIndex = len(rf.log) - 1
+  lastLogTerm = rf.log[lastLogIndex].Term
+  (args.lastLogTerm > lastLogTerm) ||
+  ((args.LastLogTerm == lastLogTerm) && (args.LastLogIndex >= lastLogIndex))
+  ```
 
   - If vote is granted, then the last heartbeat timestamp is updated,
     as any message from leader/candidate is considered an heartbeat.
@@ -65,33 +114,54 @@ The response processing logic consist of the following:
   - In all cases, the responder always send her `currentTerm` (which might have
     been updated during the current processing, see above) in the reply.
 
-### AppendEntries RPC
+## AppendEntries RPC
 
 This RPC is used to send heartbeat.
 
-The request has two parameters:
+The request has the following parameters:
   - Term: leader's term
   - LeaderId: leader's server id
+  - PrevLogIndex: Index of log entry immediately preceding new ones
+  - PrevLogTerm: Term of PrevLogIndex entry
+  - Entries[]: Log entries to store (empty for heartbeat, more than one for efficiency)
+  - LeaderCommit: Leader's commitIndex
 
 The reply has two parameters:
   - Term: follower's current term
-  - Success: true if follower has same or lesser term
+  - Success: true only if follower's log contain an entry at `PrevLogIndex`
+    whose term matches `PrevLogTerm`.
 
 ### Responder's logic
 
-  - In all cases, the responder always send her `currentTerm` in the reply.
+  - In all cases, the responder always send its `currentTerm` in the reply.
    
   - If the follower is at a higher term than the received message, then
-    set `Success` to false.
+    set `Success` to false. No transitions, no appends. Return immediately.
 
-  - Otherwise, the following is done:
+  - If the follower is at an older term, then the follower is updated
+    to catch up to leader's term and any existing voting history is erased.
 
-    - If the follower is at an older term, then the follower is updated
-      to catch up to leader's term and any existing voting history is erased.
+  - If `rf.log` does not contain an entry at `PrevLogIndex` or if that entry's
+    term does not match `PrevLogTerm`, then set `Success` to false.
 
-    - The `lastHeard` timestamp is updated to void election timeout.
+  - If an existing entry conflicts with a new one (same index but different terms),
+    delete the existing entry and all that follow it.
+    This ensures that the follower's log becomes a prefix of the leader's log.
+    This truncation step happens only after the log consistency checks pass and
+    before appending new entries.
 
-    - `Success` is set to false
+  - Append any new entries not already in log.
+
+  - Possibly update receiver's `commitIndex` as follows:
+    ```
+      if args.LeaderCommit > rf.commitIndex {
+        rf.commitIndex = min(args.LeaderCommit, index of the last new entry)
+      }
+    ```
+    This ensures that the follower does not mark entries as committed
+    that the leader hasn't safely replicated on a majority.
+
+  - The `lastHeard` timestamp is updated.
 
 ## Ticker
 
@@ -163,39 +233,3 @@ Randomization of election timeouts ensures that servers don’t repeatedly
 start elections at the same time, which reduces the likelihood of split votes.
 
 ## Testing
-
-The following version seemed working.
-```
-c27631a Wed Oct 29 12:54:45 2025 Arun Saha (HEAD -> lab3-A) Lab3A working
-```
-
-It ran `go test -race -v -run 3A` 20 times and they all PASSed.
-
-```
-python3 testmany.py 20
-Running 20 iterations of 'go test -race -v -run 3A' ...
-
-[  1] PASS
-[  2] PASS
-[  3] PASS
-[  4] PASS
-[  5] PASS
-[  6] PASS
-[  7] PASS
-[  8] PASS
-[  9] PASS
-[ 10] PASS
-[ 11] PASS
-[ 12] PASS
-[ 13] PASS
-[ 14] PASS
-[ 15] PASS
-[ 16] PASS
-[ 17] PASS
-[ 18] PASS
-[ 19] PASS
-[ 20] PASS
-
-Summary:
-20 test iterations, 20 passed, 0 failed
-```
