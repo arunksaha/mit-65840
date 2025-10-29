@@ -161,3 +161,41 @@ The `electionTimeout` is reset at different situations:
 
 Randomization of election timeouts ensures that servers don’t repeatedly
 start elections at the same time, which reduces the likelihood of split votes.
+
+## Testing
+
+The following version seemed working.
+```
+c27631a Wed Oct 29 12:54:45 2025 Arun Saha (HEAD -> lab3-A) Lab3A working
+```
+
+It ran `go test -race -v -run 3A` 20 times and they all PASSed.
+
+```
+python3 testmany.py 20
+Running 20 iterations of 'go test -race -v -run 3A' ...
+
+[  1] PASS
+[  2] PASS
+[  3] PASS
+[  4] PASS
+[  5] PASS
+[  6] PASS
+[  7] PASS
+[  8] PASS
+[  9] PASS
+[ 10] PASS
+[ 11] PASS
+[ 12] PASS
+[ 13] PASS
+[ 14] PASS
+[ 15] PASS
+[ 16] PASS
+[ 17] PASS
+[ 18] PASS
+[ 19] PASS
+[ 20] PASS
+
+Summary:
+20 test iterations, 20 passed, 0 failed
+```
