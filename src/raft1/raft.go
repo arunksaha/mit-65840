@@ -358,6 +358,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	termIncremented := false
 
 	rf.lock()
+	defer rf.unlock()
 
 	// Reset election timer
 	rf.lastHeard = time.Now()
@@ -442,9 +443,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.ConflictTerm = -1
 	reply.ConflictIndex = 0
 
-	rf.unlock()
-
-	rf.persist()
+	// Persist without grabbing read lock (grabReadLock)
+	// since this function already holds the lock.
+	rf.persistImpl(false)
 
 	mesg := fmt.Sprintf("AppendEntries from %d completed, term incremented? = %t",
 		args.LeaderId, termIncremented)
@@ -480,11 +481,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (3B).
 	rf.lock()
 
-	if rf.state != Leader {
-		return -1, int(rf.currentTerm), false
-	}
-
 	term = int(rf.currentTerm)
+
+	if rf.state != Leader {
+		rf.unlock()
+		return -1, term, false
+	}
 
 	entry := logEntry{
 		Term:    term,
@@ -608,7 +610,9 @@ func (rf *Raft) raftInit() {
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
-	rf.persist()
+	// Persisting here would be too early and incorrect
+	// as we are going to read the previously persisted state right after.
+	// rf.persist()
 }
 
 func (rf *Raft) startElection() {
