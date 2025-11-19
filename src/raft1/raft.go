@@ -130,15 +130,40 @@ func (rf *Raft) persist() {
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
 
+	rf.persistImpl(true)
+}
+
+func (rf *Raft) persistImpl(grabReadLock bool) {
+	encodeOk := true
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	rf.mu.RLock()
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.log)
-	rf.mu.RUnlock()
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+
+	if grabReadLock {
+		rf.mu.RLock()
+	}
+
+	if err := e.Encode(rf.currentTerm); err != nil {
+		log.Printf("Server %d: ERROR encoding currentTerm: %v\n", rf.me, err)
+		encodeOk = false
+	}
+	if err := e.Encode(rf.votedFor); err != nil {
+		log.Printf("Server %d: ERROR encoding votedFor: %v\n", rf.me, err)
+		encodeOk = false
+	}
+	if err := e.Encode(rf.log); err != nil {
+		log.Printf("Server %d: ERROR encoding log: %v\n", rf.me, err)
+		encodeOk = false
+	}
+
+	if grabReadLock {
+		rf.mu.RUnlock()
+	}
+
+	if encodeOk {
+		raftstate := w.Bytes()
+		rf.persister.Save(raftstate, nil)
+	}
 }
 
 // restore previously persisted state.
@@ -166,15 +191,15 @@ func (rf *Raft) readPersist(data []byte) {
 	var rfVotedFor int
 	var rfLog []logEntry
 	if err := d.Decode(&rfTerm); err != nil {
-		DLog("Server %d: ERROR decoding currentTerm %v\n", rf.me, err)
+		log.Printf("Server %d: ERROR decoding currentTerm %v\n", rf.me, err)
 		return
 	}
 	if err := d.Decode(&rfVotedFor); err != nil {
-		DLog("Server %d: ERROR decoding votedFor %v\n", rf.me, err)
+		log.Printf("Server %d: ERROR decoding votedFor %v\n", rf.me, err)
 		return
 	}
 	if err := d.Decode(&rfLog); err != nil {
-		DLog("Server %d: ERROR decoding log %v\n", rf.me, err)
+		log.Printf("Server %d: ERROR decoding log %v\n", rf.me, err)
 		return
 	}
 
@@ -183,6 +208,9 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.votedFor = ServerId(rfVotedFor)
 	rf.log = rfLog
 	rf.mu.Unlock()
+
+	assert(len(rf.log) >= 1, "rf.log must have at least 1 entry")
+	assert(rf.log[0].Term == 0, "rf.log[0] must be Term 0")
 }
 
 // how many bytes in Raft's persisted log?
@@ -265,6 +293,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.unlock()
 
+	rf.persist()
+
 	mesg := fmt.Sprintf("RequestVote done: request=%+v, reply=%+v", *args, *reply)
 	rf.DLogState(mesg)
 }
@@ -328,7 +358,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	termIncremented := false
 
 	rf.lock()
-	defer rf.unlock()
 
 	// Reset election timer
 	rf.lastHeard = time.Now()
@@ -413,7 +442,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.ConflictTerm = -1
 	reply.ConflictIndex = 0
 
-	mesg := fmt.Sprintf("AppendEntries from %d completed, term incremented? = %t", args.LeaderId, termIncremented)
+	rf.unlock()
+
+	rf.persist()
+
+	mesg := fmt.Sprintf("AppendEntries from %d completed, term incremented? = %t",
+		args.LeaderId, termIncremented)
 	DLog("Server %d: %s\n", rf.me, mesg)
 }
 
@@ -445,7 +479,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (3B).
 	rf.lock()
-	defer rf.unlock()
 
 	if rf.state != Leader {
 		return -1, int(rf.currentTerm), false
@@ -463,6 +496,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.nextIndex[rf.me] = index + 1
 	rf.matchingIndex[rf.me] = index
+
+	rf.unlock()
+
+	rf.persist()
 
 	mesg := fmt.Sprintf("Server %d: Start(): index=%d, term=%d, isLeader?=%t\n",
 		rf.me, index, term, isLeader)
@@ -570,6 +607,8 @@ func (rf *Raft) raftInit() {
 	rf.log = append(rf.log, zeroEntry)
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+
+	rf.persist()
 }
 
 func (rf *Raft) startElection() {
@@ -588,6 +627,8 @@ func (rf *Raft) startElection() {
 	rf.votedFor = ServerId(rf.me)
 	rf.lastHeard = time.Now()
 	rf.unlock()
+
+	rf.persist()
 
 	DLog("Server %d: Starting ELECTION term (incremented) = %d, state = %d peers = %d, quorum = %d\n",
 		rf.me, curTerm, curState, npeers, quorum)
@@ -790,6 +831,7 @@ func (rf *Raft) advanceCommitIndexIfPossible() {
 	}
 }
 
+// transitionToFollower() must be called while holding rf.lock().
 func (rf *Raft) transitionToFollower(newTerm Term) {
 	rf.state = Follower
 	rf.votedFor = ServerIdNull
@@ -798,6 +840,10 @@ func (rf *Raft) transitionToFollower(newTerm Term) {
 	rf.resetElectionTimeout()
 	DLog("Server %d: transition to Follower: state = %d term = %d, voted for = %d\n",
 		rf.me, rf.state, rf.currentTerm, rf.votedFor)
+
+	// Persist without grabbing read lock (grabReadLock)
+	// since the caller (of transitionToFollower) holds the lock.
+	rf.persistImpl(false)
 }
 
 const electionTimeoutMin = 300 // Milliseconds
