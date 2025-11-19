@@ -8,6 +8,7 @@ package raft
 
 import (
 	//	"bytes"
+	"bytes"
 	"fmt"
 	"log"
 	"math/rand"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raftapi"
 	tester "6.5840/tester1"
@@ -127,6 +129,16 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	rf.mu.RLock()
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	rf.mu.RUnlock()
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 // restore previously persisted state.
@@ -147,6 +159,30 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var rfTerm int
+	var rfVotedFor int
+	var rfLog []logEntry
+	if err := d.Decode(&rfTerm); err != nil {
+		DLog("Server %d: ERROR decoding currentTerm %v\n", rf.me, err)
+		return
+	}
+	if err := d.Decode(&rfVotedFor); err != nil {
+		DLog("Server %d: ERROR decoding votedFor %v\n", rf.me, err)
+		return
+	}
+	if err := d.Decode(&rfLog); err != nil {
+		DLog("Server %d: ERROR decoding log %v\n", rf.me, err)
+		return
+	}
+
+	rf.mu.Lock()
+	rf.currentTerm = Term(rfTerm)
+	rf.votedFor = ServerId(rfVotedFor)
+	rf.log = rfLog
+	rf.mu.Unlock()
 }
 
 // how many bytes in Raft's persisted log?
